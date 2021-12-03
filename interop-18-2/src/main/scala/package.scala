@@ -12,7 +12,7 @@ package object tan {
   @tapirVersion("18")
   trait Controller[F[_]]
 
-  def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[_, _, _, Any, Eff]] = macro tan.tmacro.compileImpl[Cls, Eff]
+  def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[_, _, _, Any, Eff]] = macro tan.tmacro.scala2.compileImpl2[Cls, Eff]
 
   // wrappers for EndpointIO
 

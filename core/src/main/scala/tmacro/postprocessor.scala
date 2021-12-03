@@ -41,7 +41,7 @@ object postprocessor {
           case s => PathSegment2.Raw(s)
         }.toList
 
-        val inputs = meth.params.map { param =>
+        val inputs: List[MethodInput2[Tpe]] = meth.params.map { param =>
           val inputType = param.annotations.collectFirst {
             case AnnotationMirror1.Query => MethodInput2.Query(param.name, param.tpe)
             case AnnotationMirror1.Body =>

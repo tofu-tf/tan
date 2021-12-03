@@ -1,7 +1,7 @@
 package tan
 package tmacro
 
-import tmacro.mirror1.{HttpMethod1, DefaultBodyMirror1, InputSourceMirror1}
+import tmacro.mirror1.{HttpMethod1, DefaultBodyMirror1}
 
 object mirror2 {
   sealed trait NamingConvention2
@@ -17,7 +17,9 @@ object mirror2 {
     pathSeg: NamingConvention2
   )
 
-  sealed trait MethodInput2[Tpe]
+  sealed trait MethodInput2[Tpe] {
+    val tpe: Tpe
+  }
   object MethodInput2 {
     case class Path[Tpe](name: String, tpe: Tpe) extends MethodInput2[Tpe]
     case class Query[Tpe](name: String, tpe: Tpe) extends MethodInput2[Tpe]

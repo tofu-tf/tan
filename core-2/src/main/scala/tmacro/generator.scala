@@ -2,11 +2,11 @@ package tan
 package tmacro
 
 import scala.reflect.macros.blackbox
-import attrs._
-import tmacro.mirror1.{HttpMethod1, AnnotationMirror1, DefaultBodyMirror1}
-import tmacro.mirror2.{ControllerMirror2, PathSegment2, MethodInput2, NamingConvention2, MethodOutput2}
-
 import scala.util.matching.Regex
+import attrs._
+
+import mirror1._
+import mirror2._
 
 object generator {
   private val camelCaseWordBoundary: Regex = "[A-Z\\d]".r
