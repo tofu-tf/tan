@@ -2,6 +2,7 @@ import sttp.model.StatusCode
 import sttp.tapir._
 
 import tan._
+import tan.attrs._
 
 import scala.language.experimental.macros
 

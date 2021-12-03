@@ -4,10 +4,12 @@ import sttp.tapir.json.circe.jsonBody
 import sttp.tapir.server.ServerEndpoint
 import sttp.tapir.{statusCode, EndpointOutput, Schema, EndpointInput}
 
-import scala.annotation.StaticAnnotation
 import scala.language.experimental.macros
 
-package object tan extends Attrs {
+package object tan {
+  import attrs._
+
+  @tapirVersion("18")
   trait Controller[F[_]]
 
   def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[_, _, _, Any, Eff]] = macro tan.tmacro.compileImpl[Cls, Eff]
@@ -36,10 +38,6 @@ package object tan extends Attrs {
     implicit def constructorForJsonTag[V: Decoder: Encoder: Schema]: EndpointOutputConstructor[V, DefTags.JsonDefTag] = new EndpointOutputConstructor[V, DefTags.JsonDefTag] {
       override val instance: EndpointOutput[V] = jsonBody[V]
     }
-  }
-
-  object DefTags {
-    trait JsonDefTag
   }
 
   trait Security[VIn, VOut, F[_]] {

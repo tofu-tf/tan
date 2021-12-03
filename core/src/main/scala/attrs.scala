@@ -2,8 +2,12 @@ package tan
 
 import scala.annotation.StaticAnnotation
 
-trait Attrs {
-  // markup attributes and stuff
+object attrs {
+  final class tapirVersion(version: String) extends StaticAnnotation
+
+  object DefTags {
+    trait JsonDefTag
+  }
 
   sealed trait DefaultBody
   sealed trait Named

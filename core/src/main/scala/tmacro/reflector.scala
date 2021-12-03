@@ -2,6 +2,7 @@ package tan
 package tmacro
 
 import scala.reflect.macros.blackbox
+import attrs._
 import mirror1._
 
 object reflector {

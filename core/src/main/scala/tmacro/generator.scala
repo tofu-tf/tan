@@ -2,9 +2,9 @@ package tan
 package tmacro
 
 import scala.reflect.macros.blackbox
+import attrs._
+import tmacro.mirror1.{HttpMethod1, AnnotationMirror1, DefaultBodyMirror1}
 import tmacro.mirror2.{ControllerMirror2, PathSegment2, MethodInput2, NamingConvention2, MethodOutput2}
-
-import tan.tmacro.mirror1.{HttpMethod1, AnnotationMirror1, DefaultBodyMirror1}
 
 import scala.util.matching.Regex
 
@@ -31,10 +31,28 @@ object generator {
     case class IndexedInput(input: MethodInput2[Type], tree: c.Tree, index: Int)
 
     val fTpe = weakTypeOf[F[_]].typeConstructor
-    val eicType = weakTypeOf[EndpointInputConstructor[_, _]]
-    val eocType = weakTypeOf[EndpointOutputConstructor[_, _]]
-    val peiType = weakTypeOf[ProvidedEndpointInput[_]]
-    val secType = weakTypeOf[Security[_, _, F]]
+
+    def findType(tree: Tree): Type = c.typecheck(tree).tpe
+
+    val ctrType = findType(q"(???): _root_.tan.Controller[({type L[A] = A})#L]")
+    val eicType = findType(q"(???): _root_.tan.EndpointInputConstructor[_, _]")
+    val eocType = findType(q"(???): _root_.tan.EndpointOutputConstructor[_, _]")
+    val peiType = findType(q"(???): _root_.tan.ProvidedEndpointInput[_]")
+    val peoType = findType(q"(???): _root_.tan.ProvidedEndpointOutput[_]")
+    val secType = findType(q"(???): _root_.tan.Security[_, _, ({type L[A] = A})#L]")
+
+    val tapirVersion = ctrType.typeSymbol.annotations.map(_.tree).collectFirst {
+      case q"new $annot($arg)" if annot.symbol == symbolOf[tapirVersion] =>
+        arg match {
+          case Literal(Constant(s: String)) => s
+        }
+    }.get
+
+    val useNewSecurity = tapirVersion match {
+      case "18" => false
+      case "19" => true
+      case v => c.abort(c.enclosingPosition, "Unsupported tapir version " + v)
+    }
 
     val endpoints = mirror.methods.map { method =>
       val pathInputs = method.inputs.collect {
@@ -113,7 +131,7 @@ object generator {
       }
 
       def tupleMappingTree(hasSec: Boolean, multiInput: Boolean) = {
-        val args = if (hasSec)
+        val args = if (hasSec) {
           indexedInputs.map {
             case IndexedInput(_, _, -1) => q"t._1"
             case IndexedInput(_, _, ix) =>
@@ -122,7 +140,7 @@ object generator {
               else
                 q"t._2"
           }
-        else if (multiInput)
+        } else if (multiInput)
           indexedInputs.map(i => q"t.${TermName("_" + (i.index + 1))}")
         else
           indexedInputs.map(i => q"t")
@@ -137,7 +155,11 @@ object generator {
           case MethodOutput2(false, false, _, _) => q"monadF.pure($rawBody.asRight)"
         }
 
-        q"{ import _root_.cats.syntax.either._; val monadF = $monadForF; t => $wrappedBody }"
+        val resultLambda = if (hasSec && useNewSecurity) {
+          q"(s => { i => { val t = (s, i); $wrappedBody } })"
+        } else q"(t => $wrappedBody)"
+
+        q"{ import _root_.cats.syntax.either._; val monadF = $monadForF; $resultLambda }"
       }
 
       val endpointDef = {
@@ -173,7 +195,12 @@ object generator {
           withDefnTag
         }
 
-        val withInputs = {
+        val withInputs = if (useNewSecurity) {
+          val withPath = q"$endpointWithMethod.in($pathInput)"
+          val withNonPathInputs = nonPathInputs.foldLeft(withPath)((e, i) => q"$e.in(${i.tree})")
+
+          secInputs.foldLeft(withNonPathInputs)((e, i) => q"$e.securityIn(${i.tree}.input).serverSecurityLogic(${i.tree}.handler)")
+        } else {
           val withSecInputs = secInputs.foldLeft(endpointWithMethod)((e, i) => q"$e.in(${i.tree}.input).serverLogicForCurrent(${i.tree}.handler)")
           val withPath = q"$withSecInputs.in($pathInput)"
 
@@ -181,7 +208,7 @@ object generator {
         }
 
         def inferOutputTypeEncoder(tpe: Type): Tree = {
-          c.inferImplicitValue(appliedType(weakTypeOf[ProvidedEndpointOutput[_]].typeConstructor, tpe)) match {
+          c.inferImplicitValue(appliedType(peoType.typeConstructor, tpe)) match {
             case EmptyTree => mirror.defaultBody match {
               case Some(defBody) => c.inferImplicitValue(appliedType(eocType, tpe, defBodyToTag(defBody))) match {
                 case EmptyTree => c.abort(c.enclosingPosition, s"Failed to find PEO or EOC for type $tpe")
