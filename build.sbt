@@ -48,8 +48,8 @@ lazy val interop18_2 = project.in(file("interop-18-2"))
   )
 
 lazy val interop18_3 = project.in(file("interop-18-3"))
-  .settings(tapir18)
   .dependsOn(core3)
+  .settings(tapir18)
   .settings(
     idePackagePrefix := Some("tan"),
     name := "tan-tapir18-3",
