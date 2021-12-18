@@ -1,15 +1,11 @@
 package tan
 package tmacro
 
-import cats.Monad
-
 import tmacro.mirror1.{HttpMethod1, ControllerMirror1, AnnotationMirror1, DefaultBodyMirror1}
 import tmacro.mirror2.{ControllerMirror2, MethodInput2, NamingConvention2, PathSegment2}
 
 import scala.quoted.*
-import sttp.tapir.*
-import sttp.tapir.typelevel.*
-import tan.attrs.DefTags
+import attrs.DefTags
 
 import scala.util.matching.Regex
 
@@ -33,37 +29,60 @@ object generator {
     import q.reflect._
     import q.reflect.report._
 
-    case class InputWithTree[I <: MethodInput2[TypeRepr]](input: I, expr: Expr[EndpointInput[Unit]])
-    case class IndexedInput(input: MethodInput2[TypeRepr], expr: Expr[EndpointInput[Unit]], index: Int)
+    case class InputWithTree[I <: MethodInput2[TypeRepr]](input: I, term: Term)
+    case class IndexedInput(input: MethodInput2[TypeRepr], term: Term, index: Int)
 
     val clsSym = TypeRepr.of[Cls].typeSymbol
 
     val unitSym = TypeRepr.of[Unit].typeSymbol
     val stringSym = TypeRepr.of[String].typeSymbol
 
+    def summon(repr: TypeRepr): Option[Term] = {
+      val tpe = repr.asType.asInstanceOf[Type[Any]]
+
+      Expr.summon(using tpe).map(_.asTerm)
+    }
+
+    def typeApply(tcc: TypeRepr, tpes: TypeRepr*): TypeRepr = {
+      val tc = tcc match {
+        case AppliedType(tc, _) => tc
+        case tc => tc
+      }
+
+      tc.appliedTo(tpes.toList)
+    }
+
+    val tapirInteropRoot: Term = Ref(Symbol.requiredModule("tan.TapirInterop"))
+    def tapir(name: String): Term = Select.unique(tapirInteropRoot, name)
+
+    def ttree(repr: TypeRepr): TypeTree = TypeTree.of(using repr.asType)
+
+    val eic = TypeIdent(Symbol.requiredClass("tan.EndpointInputConstructor")).tpe
+    val eoc = TypeIdent(Symbol.requiredClass("tan.EndpointOutputConstructor")).tpe
+    val pei = TypeIdent(Symbol.requiredClass("tan.ProvidedEndpointInput")).tpe
+    val peo = TypeIdent(Symbol.requiredClass("tan.ProvidedEndpointOutput")).tpe
+
+    val fakeParamConcat = TypeIdent(Symbol.requiredClass("tan.TapirInterop.FakeParamConcat")).tpe
+    val paramConcat = TypeIdent(Symbol.requiredClass("sttp.tapir.typelevel.ParamConcat.Aux")).tpe
+    val catsMonad = TypeIdent(Symbol.requiredClass("cats.Monad")).tpe
+
     val endpoints = mirror.methods.map { method =>
-      val withMethod = method.method match {
-        case HttpMethod1.Get => '{ endpoint.get }
-        case HttpMethod1.Post => '{ endpoint.post }
-        case HttpMethod1.Put => '{ endpoint.put }
-        case HttpMethod1.Delete => '{ endpoint.delete }
-      }
-
-      val withTags = (mirror.tag, method.tag) match {
-        case (Some(gtag), Some(mtag)) => '{ ${ withMethod }.tag(${ Expr(gtag) }).tag(${ Expr(mtag) }) }
-        case (Some(gtag), _) => '{ ${ withMethod }.tag(${ Expr(gtag) }) }
-        case (_, Some(mtag)) => '{ ${ withMethod }.tag(${ Expr(mtag) }) }
-        case _ => withMethod
-      }
-
-      val withSummary = {
-        val summary = method.summary.getOrElse(rename(method.name, NamingConvention2.SpaceSnake).capitalize)
-
-        '{ ${ withTags }.summary(${ Expr(summary) }) }
-      }
+      val endpointBase = Apply(
+        tapir("makeEndpoint"),
+        List(
+          method.method match {
+            case HttpMethod1.Get => '{ HttpMethod1.Get }.asTerm
+            case HttpMethod1.Post => '{ HttpMethod1.Post }.asTerm
+            case HttpMethod1.Put => '{ HttpMethod1.Put }.asTerm
+            case HttpMethod1.Delete => '{ HttpMethod1.Delete }.asTerm
+          },
+          Expr.ofList((mirror.tag.toList ++ method.tag).map(t => Expr(t))).asTerm,
+          Literal(StringConstant(method.summary.getOrElse(rename(method.name, NamingConvention2.SpaceSnake).capitalize)))
+        )
+      )
 
       val pathInputs = method.inputs.collect {
-        case p: MethodInput2.Path[TypeRepr] => InputWithTree(p, '{ ??? })
+        case p: MethodInput2.Path[TypeRepr] => InputWithTree(p, '{ ??? }.asTerm)
       }
 
       def defBodyToTag(defBody: DefaultBodyMirror1): TypeRepr =
@@ -73,61 +92,35 @@ object generator {
 
       val nonPathInputs = method.inputs.collect {
         case np: MethodInput2.Query[TypeRepr] =>
-          np.tpe.asType match {
-            case '[inTpe] =>
-              val inExpr = '{
-                given Codec[String, inTpe, CodecFormat.TextPlain] = ${
-                  Expr.summon[Codec[String, inTpe, CodecFormat.TextPlain]]
-                    .getOrElse(errorAndAbort(s"Failed to find string codec for ${np.tpe}"))
-                }
+          val tree = Apply(TypeApply(tapir("query"), List(ttree(np.tpe))), List(Literal(StringConstant(np.name))))
 
-                query[inTpe](${ Expr(np.name) }).asInstanceOf[EndpointInput[Unit]]
-              }
-
-              InputWithTree(np, inExpr)
-          }
+          InputWithTree(np, tree)
         case np: MethodInput2.Body[TypeRepr] =>
-          np.tpe.dealias.asType match {
-            case dealiased @ '[dealiased] =>
-              np.bodyType match {
-                case Some(AnnotationMirror1.Json) =>
-                  Expr.summon[EndpointInputConstructor[dealiased, DefTags.JsonDefTag]] match {
-                    case None => errorAndAbort(s"Failed to find PEI or EIC for type ${np.tpe} (dealiased to $dealiased) (note: this is explicit json body)")
-                    case Some(eic) => InputWithTree(np, '{ ${ eic }.instance.asInstanceOf[EndpointInput[Unit]] })
+          val dealiased = np.tpe.dealias
+          np.bodyType match {
+            case Some(AnnotationMirror1.Json) =>
+              summon(typeApply(eic, dealiased, TypeRepr.of[DefTags.JsonDefTag])) match {
+                case None => errorAndAbort(s"Failed to find PEI or EIC for type ${np.tpe} (dealiased to $dealiased) (note: this is explicit json body)")
+                case Some(eic) => InputWithTree(np, Select.unique(eic, "instance"))
+              }
+            case Some(AnnotationMirror1.PlainText) =>
+              if (dealiased.typeSymbol == stringSym) {
+                InputWithTree(np, TypeApply(tapir("plainBody"), List(TypeTree.of[String])))
+              } else {
+                errorAndAbort(s"Invalid/unsupported type for plainBody input: $dealiased (expecting String)")
+              }
+            case None =>
+              summon(typeApply(pei, dealiased)) match {
+                case None => mirror.defaultBody match {
+                  case Some(defBody) => summon(typeApply(eic, dealiased, defBodyToTag(defBody))) match {
+                    case None => errorAndAbort(s"Failed to find PEI or EIC for type ${np.tpe} (dealiased to $dealiased), also tried to check explicit annots")
+                    case Some(t) => InputWithTree(np, Select.unique(t, "instance"))
                   }
-                case Some(AnnotationMirror1.PlainText) =>
-                  if (TypeRepr.of[dealiased].typeSymbol == stringSym) {
-                    InputWithTree(np, '{ plainBody[String].asInstanceOf[EndpointInput[Unit]] })
-                  } else {
-                    errorAndAbort(s"Invalid/unsupported type for plainBody input: $dealiased (expecting String)")
-                  }
-                case None =>
-                  Expr.summon[ProvidedEndpointInput[dealiased]] match {
-                    case None => mirror.defaultBody match {
-                      case Some(defBody) => defBodyToTag(defBody).asType match {
-                        case '[defBody] => Expr.summon[EndpointInputConstructor[dealiased, defBody]] match {
-                          case None => errorAndAbort(s"Failed to find PEI or EIC for type ${np.tpe} (dealiased to $dealiased), also tried to check explicit annots")
-                          case Some(t) => InputWithTree(np, '{ ${ t }.instance.asInstanceOf[EndpointInput[Unit]] })
-                        }
-                      }
-                      case None => errorAndAbort(s"Failed to find PEI and no defaultBody was found")
-                    }
-                    case Some(t) => InputWithTree(np, '{ ${ t }.instance.asInstanceOf[EndpointInput[Unit]] })
-                  }
+                }
+                case Some(t) => InputWithTree(np, Select.unique(t, "instance"))
               }
           }
       }
-
-      /*
-
-      val secInputs = method.inputs.collect {
-        case np: MethodInput2.Security[Type] =>
-          c.inferImplicitValue(appliedType(secType.typeConstructor, WildcardType, np.tpe, fTpe)) match {
-            case EmptyTree => c.abort(c.enclosingPosition, s"Failed to find Security instance for type ${np.tpe}")
-            case sec => InputWithTree(np, sec)
-          }
-      } */
-
       if (method.inputs.exists(_.isInstanceOf[MethodInput2.Security[TypeRepr]]))
         errorAndAbort("Security inputs are not supported now")
 
@@ -139,13 +132,13 @@ object generator {
         val indexedPathInputs = pathInputs.map { p =>
           IndexedInput(
             input = p.input,
-            expr = '{ ??? },
+            term = '{ ??? }.asTerm,
             index = method.pathSegments.collect { case s: PathSegment2.Subst => s }.indexWhere(_.name == p.input.name)
           )
         }
 
         val indexedNonPathInputs = nonPathInputs.zipWithIndex.map {
-          case (np, i) => IndexedInput(np.input, np.expr, i + indexedPathInputs.size)
+          case (np, i) => IndexedInput(np.input, np.term, i + indexedPathInputs.size)
         }
 
         /*
@@ -158,110 +151,97 @@ object generator {
         method.inputs.map { i => indexedInputsUnordered.find(_.input == i).get }
       }
 
-      val (withPathInputs, arityAfterPath) = method.pathSegments.foldLeft((withSummary, 0)) { (ewa, segment) =>
+      def makeParamConcat(l: TypeRepr, r: TypeRepr, leftAr: Int): (TypeRepr, Int, TypeRepr, Term) = {
+        val rightAr = if (r.typeSymbol == unitSym) 0 else 1
+
+        val lr = if (rightAr == 0) l else leftAr match {
+          case 0 => r
+          case 1 => typeApply(TypeRepr.of[Tuple2[_, _]], l, r)
+          case _ =>
+            val AppliedType(_, ls) = l
+            Applied(TypeIdent(defn.TupleClass(leftAr + rightAr)), (ls :+ r).map(ttree)).tpe
+        }
+
+        val concat = Apply(TypeApply(Select.unique(New(ttree(typeApply(fakeParamConcat, l, r, lr))), "<init>"), List(l, r, lr).map(ttree)), List(Literal(IntConstant(leftAr)), Literal(IntConstant(rightAr))))
+
+        (lr, leftAr + rightAr, typeApply(paramConcat, l, r, lr), concat)
+      }
+
+      val (withPathInputs, pathInputsLr, arityAfterPath) = method.pathSegments.foldLeft((endpointBase, TypeRepr.of[Unit], 0)) { (ewa, segment) =>
         segment match {
           case PathSegment2.Raw(name) =>
-            val (expr, leftAr) = ewa
+            val (expr, prevLr, leftAr) = ewa
+            val (lr, newArity, _, pc) = makeParamConcat(prevLr, TypeRepr.of[Unit], leftAr)
 
-            val nextExpr = '{
-              given ParamConcat.Aux[Unit, Unit, Unit] = new ParamConcat[Unit, Unit] {
-                override type Out = Unit
-                override def leftArity = ${ Expr(leftAr) }
-                override def rightArity = 0
-              }
+            val nextExpr = {
+              val pathInput = Apply(tapir("stringToPath"), List(Literal(StringConstant(name))))
+              val select = Select.overloaded(expr, "in", List(TypeRepr.of[Unit], lr), List(pathInput))
 
-              ${ expr }.in(${ Expr(name) })
+              Apply(select, List(pc))
             }
 
-            nextExpr -> leftAr
+            (nextExpr, lr, newArity)
 
           case PathSegment2.Subst(name) =>
             val input = pathInputs.find(_.input.name == name).get
+            val (expr, prevLr, leftAr) = ewa
+            val (lr, newArity, _, pc) = makeParamConcat(prevLr, input.input.tpe, leftAr)
 
-            val (expr, leftAr) = ewa
+            val nextExpr = {
+              val pathInput = Select.overloaded(tapirInteropRoot, "path", List(input.input.tpe), List(Literal(StringConstant(input.input.name))))
+              val select = Select.overloaded(expr, "in", List(input.input.tpe, lr), List(pathInput))
 
-            val rightAr = if (input.input.tpe.typeSymbol == unitSym) 0 else 1
-
-            val nextExpr = input.input.tpe.asType match {
-              case '[pathType] => '{
-                given Codec[String, pathType, CodecFormat.TextPlain] = ${
-                  Expr.summon[Codec[String, pathType, CodecFormat.TextPlain]]
-                    .getOrElse(errorAndAbort(s"Failed to find string codec for ${input.input.tpe}"))
-                }
-
-                given ParamConcat.Aux[Unit, pathType, Unit] = new ParamConcat[Unit, pathType] {
-                  override type Out = Unit
-                  override def leftArity = ${ Expr(leftAr) }
-                  override def rightArity = ${ Expr(rightAr )}
-                }
-
-                ${ expr }.in(path[pathType](${ Expr(input.input.name) }))
-              }
+              Apply(select, List(pc))
             }
 
-            nextExpr -> (leftAr + rightAr)
+            (nextExpr, lr, newArity)
         }
       }
 
-      val (withNonPathInputs, arityAfterNonPath) = nonPathInputs.foldLeft((withPathInputs, arityAfterPath)) { (ewa, input) =>
-        val (expr, leftAr) = ewa
+      val (withNonPathInputs, nonPathInputsLr, arityAfterNonPath) = nonPathInputs.foldLeft((withPathInputs, pathInputsLr, arityAfterPath)) { (ewa, input) =>
+        val (expr, prevLr, leftAr) = ewa
+        val (lr, newArity, _, pc) = makeParamConcat(prevLr, input.input.tpe, leftAr)
 
         val rightAr = if (input.input.tpe.typeSymbol == unitSym) 0 else 1
 
-        val nextExpr = '{
-          given ParamConcat.Aux[Unit, Unit, Unit] = new ParamConcat[Unit, Unit] {
-            override type Out = Unit
-            override def leftArity = ${ Expr(leftAr) }
-            override def rightArity = ${ Expr(rightAr) }
-          }
+        val nextExpr = {
+          val select = Select.overloaded(expr, "in", List(input.input.tpe, lr), List(input.term))
 
-          ${ expr }.in(${ input.expr })
+          Apply(select, List(pc))
         }
 
-        nextExpr -> (leftAr + rightAr)
+        (nextExpr, lr, newArity)
       }
 
-      // todo: security inputs
-
-      def inferOutputTypeEncoder(tpe: TypeRepr): Expr[EndpointOutput[Unit]] =
-        tpe.asType match {
-          case '[oTpe] =>
-            Expr.summon[ProvidedEndpointOutput[oTpe]] match {
-              case None => mirror.defaultBody match {
-                case Some(defBody) => defBodyToTag(defBody).asType match {
-                  case '[defBody] => Expr.summon[EndpointOutputConstructor[oTpe, defBody]] match {
-                    case None => errorAndAbort(s"Failed to find PEO or EOC for type $tpe")
-                    case Some(t) => '{ ${ t }.instance.asInstanceOf[EndpointOutput[Unit]] }
-                  }
-                }
-              }
-              case Some(t) => '{ ${ t }.instance.asInstanceOf[EndpointOutput[Unit]] }
+      def inferOutputTypeEncoder(tpe: TypeRepr): Term =
+        summon(typeApply(peo, tpe)) match {
+          case None => mirror.defaultBody match {
+            case Some(defBody) => summon(typeApply(eoc, tpe, defBodyToTag(defBody))) match {
+              case None => errorAndAbort(s"Failed to find PEO or EOC for type $tpe")
+              case Some(t) => Select.unique(t, "instance")
             }
+            case None => errorAndAbort("Failed to find PEO and no default body present")
+          }
+          case Some(t) => Select.unique(t, "instance")
         }
 
       val withOutputs = method.output.out match {
-        case Some(out) => '{
-          given ParamConcat.Aux[Unit, Unit, Unit] = new ParamConcat[Unit, Unit] {
-            override type Out = Unit
-            override def leftArity = 0
-            override def rightArity = 1
-          }
+        case Some(out) => {
+          val (lr, _, _, pc) = makeParamConcat(TypeRepr.of[Unit], out.tpe, 0)
 
-          ${ withNonPathInputs }.out(${ inferOutputTypeEncoder(out.tpe) })
+          Apply(Select.overloaded(withNonPathInputs, "out", List(out.tpe, lr), List(inferOutputTypeEncoder(out.tpe))), List(pc))
         }
+
         case None => withNonPathInputs
       }
 
       val withErrors = method.output.err match {
-        case Some(err) => '{
-          given ParamConcat.Aux[Unit, Unit, Unit] = new ParamConcat[Unit, Unit] {
-            override type Out = Unit
-            override def leftArity = 0
-            override def rightArity = 1
-          }
+        case Some(err) => {
+          val (lr, _, _, pc) = makeParamConcat(TypeRepr.of[Unit], err.tpe, 0)
 
-          ${ withOutputs }.errorOut(${ inferOutputTypeEncoder(err.tpe) })
+          Apply(Select.overloaded(withOutputs, "errorOut", List(err.tpe, lr), List(inferOutputTypeEncoder(err.tpe))), List(pc))
         }
+
         case None => withOutputs
       }
 
@@ -270,42 +250,52 @@ object generator {
         .filter { _.typeSymbol != unitSym }
 
       val inputTupleClass = defn.TupleClass(realInputType.size)
-      val inputTupleType = Applied(TypeIdent(inputTupleClass), realInputType.map(_.asType).map {
-        case '[wtf] => TypeTree.of[wtf]
-      }).tpe
+      val inputTupleType = Applied(TypeIdent(inputTupleClass), realInputType.map(ttree)).tpe
 
-      val monadF = Expr.summon[Monad[F]].get
+      val monadF = summon(typeApply(catsMonad, TypeRepr.of[F])).get
 
-      inputTupleType.asType match {
-        case '[itt] =>
-          val workerLambdaMType = MethodType(List("x"))(_ => List(inputTupleType), _ => TypeRepr.of[F[Either[Unit, Unit]]])
-          val workerLambda = Lambda(clsSym, workerLambdaMType, (sym, xs) => {
-            val x = xs.head.symbol
+      val requiredOutTpe = method.output.out.map(_.tpe).getOrElse(TypeRepr.of[Unit])
+      val requiredErrTpe = method.output.err.map(_.tpe).getOrElse(TypeRepr.of[Unit])
+      val requiredEitherTpe = typeApply(TypeRepr.of[Either[_, _]], requiredErrTpe, requiredOutTpe)
+      val requiredResultType = typeApply(TypeRepr.of[F], requiredEitherTpe)
 
-            val args = indexedInputs.map {
-              case IndexedInput(_, _, ix) =>
-                Select.unique(Ref(x), "_" + (ix + 1))
-            }
+      val workerLambdaMType = MethodType(List("x"))(_ => List(inputTupleType), _ => requiredResultType)
 
-            val call = Apply(Select(clsExpr.asTerm, method.callTarget), args).asExprOf[Any]
+      val workerLambda = Lambda(clsSym, workerLambdaMType, (sym, xs) => {
+        val x = xs.head.symbol
 
-            if (method.output.higher) {
-              if (method.output.either)
-                '{ ${ call }.asInstanceOf[F[Either[Unit, Unit]]] }.asTerm
-              else
-                '{ ${ monadF }.map(${ call }.asInstanceOf[F[Unit]])(v => Right(v)) }.asTerm
-            } else {
-              if (method.output.either)
-                '{ ${ monadF }.pure(${ call }.asInstanceOf[Either[Unit, Unit]]) }.asTerm
-              else
-                '{ ${ monadF }.pure(Right(${ call }.asInstanceOf[Unit])) }.asTerm
-            }
-          }).asExprOf[itt => F[Either[Unit, Unit]]]
+        val args = indexedInputs.map {
+          case IndexedInput(_, _, ix) =>
+            Select.unique(Ref(x), "_" + (ix + 1))
+        }
 
-          '{ ${ withErrors }.serverLogic[F](${ workerLambda }.asInstanceOf[Unit => F[Either[Unit, Unit]]]).asInstanceOf[S] }
-      }
+        val call = Apply(Select(clsExpr.asTerm, method.callTarget), args)
+
+        def right(term: Term) =
+          Apply(TypeApply(tapir("right"), List(requiredErrTpe, requiredOutTpe).map(ttree)), List(term))
+
+        if (method.output.higher) {
+          if (method.output.either) {
+            call
+          } else {
+            val asRightLambdaTpe = MethodType(List("v"))(_ => List(requiredOutTpe), _ => requiredEitherTpe)
+
+            Apply(Apply(Select.unique(monadF, "map"), List(call)), List(Lambda(clsSym, asRightLambdaTpe, (_, xs) => right(Ref(xs.head.symbol)))))
+          }
+        } else {
+          if (method.output.either) {
+            Apply(TypeApply(Select.unique(monadF, "pure"), List(ttree(requiredEitherTpe))), List(call))
+          } else {
+            val asRightLambdaTpe = MethodType(List("v"))(_ => List(requiredOutTpe), _ => requiredEitherTpe)
+
+            Apply(TypeApply(Select.unique(monadF, "pure"), List(ttree(requiredEitherTpe))), List(right(call)))
+          }
+        }
+      })
+
+      Select.overloaded(withErrors, "serverLogic", List(TypeRepr.of[F]), List(workerLambda))
     }
 
-    Expr.ofList(endpoints)
+    Expr.ofList(endpoints.map(_.asExprOf[S]))
   }
 }

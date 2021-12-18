@@ -2,9 +2,14 @@ package tan
 
 import sttp.tapir.*
 import sttp.tapir.CodecFormat.TextPlain
+import sttp.tapir.typelevel.ParamConcat
 import tan.tmacro.mirror1.HttpMethod1
 
 object TapirInterop {
+  class FakeParamConcat[L, R, LR](override val leftArity: Int, override val rightArity: Int) extends ParamConcat[L, R] {
+    override type Out = LR
+  }
+  
   def makeEndpoint(method: HttpMethod1, tags: List[String], summary: String): Endpoint[Unit, Unit, Unit, Any] = {
     val withMethod = method match {
       case HttpMethod1.Get => endpoint.get

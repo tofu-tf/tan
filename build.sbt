@@ -30,7 +30,7 @@ lazy val core2 = project.in(file("core-2"))
 
 lazy val core3 = project.in(file("core-3"))
   .dependsOn(core)
-  .settings(tapir18)
+  // .settings(tapir18)
   .settings(
     idePackagePrefix := Some("tan"),
     name := "tan-core3",

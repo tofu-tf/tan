@@ -1,10 +1,10 @@
-/* import sttp.model.StatusCode
-import tan.attrs.DefTags
-import sttp.tapir.{Schema, EndpointInput, EndpointOutput}
 import io.circe.{Encoder, Decoder}
-import sttp.tapir.statusCode
+import sttp.model.StatusCode
 import sttp.tapir.json.circe.jsonBody
 import sttp.tapir.server.ServerEndpoint
+import sttp.tapir.{statusCode, EndpointOutput, Schema, EndpointInput}
+
+import scala.language.experimental.macros
 
 package object tan {
   import attrs._
@@ -45,4 +45,3 @@ package object tan {
     def handler(in: VIn): F[Either[Unit, VOut]]
   }
 }
-*/
