@@ -52,7 +52,7 @@ object generator {
       tc.appliedTo(tpes.toList)
     }
 
-    val tapirInteropRoot: Term = Ref(Symbol.requiredModule("tan.TapirInterop"))
+    val tapirInteropRoot: Term = Ref(Symbol.requiredModule("tan.TapirScala3Interop"))
     def tapir(name: String): Term = Select.unique(tapirInteropRoot, name)
 
     def ttree(repr: TypeRepr): TypeTree = TypeTree.of(using repr.asType)
@@ -62,7 +62,7 @@ object generator {
     val pei = TypeIdent(Symbol.requiredClass("tan.ProvidedEndpointInput")).tpe
     val peo = TypeIdent(Symbol.requiredClass("tan.ProvidedEndpointOutput")).tpe
 
-    val fakeParamConcat = TypeIdent(Symbol.requiredClass("tan.TapirInterop.FakeParamConcat")).tpe
+    val fakeParamConcat = TypeIdent(Symbol.requiredClass("tan.TapirScala3Interop.FakeParamConcat")).tpe
     val paramConcat = TypeIdent(Symbol.requiredClass("sttp.tapir.typelevel.ParamConcat.Aux")).tpe
     val catsMonad = TypeIdent(Symbol.requiredClass("cats.Monad")).tpe
 

@@ -5,7 +5,7 @@ import sttp.tapir.CodecFormat.TextPlain
 import sttp.tapir.typelevel.ParamConcat
 import tan.tmacro.mirror1.HttpMethod1
 
-object TapirInterop {
+object TapirScala3Interop {
   class FakeParamConcat[L, R, LR](override val leftArity: Int, override val rightArity: Int) extends ParamConcat[L, R] {
     override type Out = LR
   }
