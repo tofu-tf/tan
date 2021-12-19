@@ -34,4 +34,7 @@ object TapirScala3Interop {
     sttp.tapir.stringToPath(s)
 
   def right[E, A](a: A): Either[E, A] = Right(a)
+  
+  def rightWrap[E, E2, A](e: Either[E2, A]): Either[Either[E2, E], A] = e.left.map(x => Left(x))
+  def leftWrap[E, E2, A](e: Either[E, A]): Either[Either[E2, E], A] = e.left.map(x => Right(x))
 }

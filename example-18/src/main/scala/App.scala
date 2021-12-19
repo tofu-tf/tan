@@ -15,10 +15,12 @@ import scala.language.experimental.macros
 object App extends IOApp {
   case class SecureThingy(wtf: String)
   object SecureThingy {
-    implicit val security: Security.Aux[String, SecureThingy, IO] = new Security[SecureThingy, IO] {
+    implicit val security: Security.Aux[String, SecureThingy, Unit, IO] = new Security[SecureThingy, IO] {
       type VIn = String
+      type VErr = Unit
 
       override val input: EndpointInput[String] = sttp.tapir.query[String]("wowsuchsecure")//auth.bearer[String]()
+      override val errorOutput: EndpointOutput[Unit] = sttp.tapir.emptyOutputAs(())
       override def handler(in: String): IO[Either[Unit, SecureThingy]] = IO { Right(SecureThingy("kek" + in)) }
     }
   }
@@ -35,8 +37,7 @@ object App extends IOApp {
     private def wtf(): String = "hi"
 
     @get("a/{foo}/c/{qux}")
-    // def x(foo: String, @query bar: String, qux: Int, @security secure: SecureThingy): IO[Either[StatusCode, String]] = IO {
-    def x(foo: String, @query bar: String, qux: Int, @security secure: SecureThingy): IO[Either[Unit, String]] = IO {
+    def x(foo: String, @query bar: String, qux: Int, @security secure: SecureThingy): IO[Either[StatusCode, String]] = IO {
       Right(s"foo=$foo, bar=$bar, qux=$qux, security=$secure")
     }
 

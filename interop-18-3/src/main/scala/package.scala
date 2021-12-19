@@ -42,11 +42,13 @@ package object tan {
 
   trait Security[VOut, F[_]] {
     type VIn
+    type VErr
 
     val input: EndpointInput[VIn]
-    def handler(in: VIn): F[Either[Unit, VOut]]
+    val errorOutput: EndpointOutput[VErr]
+    def handler(in: VIn): F[Either[VErr, VOut]]
   }
   object Security {
-    type Aux[VIn_, VOut, F[_]] = Security[VOut, F] { type VIn = VIn_ }
+    type Aux[VIn_, VOut, VErr_, F[_]] = Security[VOut, F] { type VIn = VIn_; type VErr = VErr_ }
   }
 }
