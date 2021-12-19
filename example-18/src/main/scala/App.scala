@@ -15,8 +15,10 @@ import scala.language.experimental.macros
 object App extends IOApp {
   case class SecureThingy(wtf: String)
   object SecureThingy {
-    implicit val security: Security[String, SecureThingy, IO] = new Security[String, SecureThingy, IO] {
-      override val input: EndpointInput[String] = auth.bearer[String]()
+    implicit val security: Security.Aux[String, SecureThingy, IO] = new Security[SecureThingy, IO] {
+      type VIn = String
+
+      override val input: EndpointInput[String] = sttp.tapir.query[String]("wowsuchsecure")//auth.bearer[String]()
       override def handler(in: String): IO[Either[Unit, SecureThingy]] = IO { Right(SecureThingy("kek" + in)) }
     }
   }
@@ -33,12 +35,13 @@ object App extends IOApp {
     private def wtf(): String = "hi"
 
     @get("a/{foo}/c/{qux}")
-    def x(foo: String, @query bar: String, qux: Int): IO[Either[StatusCode, String]] = IO {
-      Right(s"foo=$foo, bar=$bar, qux=$qux")
+    // def x(foo: String, @query bar: String, qux: Int, @security secure: SecureThingy): IO[Either[StatusCode, String]] = IO {
+    def x(foo: String, @query bar: String, qux: Int, @security secure: SecureThingy): IO[Either[Unit, String]] = IO {
+      Right(s"foo=$foo, bar=$bar, qux=$qux, security=$secure")
     }
 
     @post("a/{foo}/c/{qux}")
-    def y(foo: String, @query bar: String, qux: Int, /* @security secure: SecureThingy, */ @body ptxt: String): String = ""
+    def y(foo: String, @query bar: String, qux: Int, @security secure: SecureThingy, @body ptxt: String, @query kekekek: String): String = ""
 
     @put("a/{foo}/c/{qux}")
     def z(foo: String, @query bar: String, qux: Int, @query bark: Boolean): List[String] = Nil

@@ -9,8 +9,8 @@ object TapirScala3Interop {
   class FakeParamConcat[L, R, LR](override val leftArity: Int, override val rightArity: Int) extends ParamConcat[L, R] {
     override type Out = LR
   }
-  
-  def makeEndpoint(method: HttpMethod1, tags: List[String], summary: String): Endpoint[Unit, Unit, Unit, Any] = {
+
+  def makeEndpoint(method: HttpMethod1, tags: List[String], summary: String): Endpoint[Unit, Unit, Unit, Unit, Any] = {
     val withMethod = method match {
       case HttpMethod1.Get => endpoint.get
       case HttpMethod1.Post => endpoint.post

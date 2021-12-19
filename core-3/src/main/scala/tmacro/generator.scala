@@ -5,7 +5,7 @@ import tmacro.mirror1.{HttpMethod1, ControllerMirror1, AnnotationMirror1, Defaul
 import tmacro.mirror2.{ControllerMirror2, MethodInput2, NamingConvention2, PathSegment2}
 
 import scala.quoted.*
-import attrs.DefTags
+import attrs.{DefTags, tapirVersion}
 
 import scala.util.matching.Regex
 
@@ -57,10 +57,27 @@ object generator {
 
     def ttree(repr: TypeRepr): TypeTree = TypeTree.of(using repr.asType)
 
+    val ctrType = TypeIdent(Symbol.requiredClass("tan.Controller")).tpe
+    val tapirVersionSym = TypeRepr.of[tapirVersion].typeSymbol
+
+    val secType = TypeIdent(Symbol.requiredClass("tan.Security")).tpe
+
     val eic = TypeIdent(Symbol.requiredClass("tan.EndpointInputConstructor")).tpe
     val eoc = TypeIdent(Symbol.requiredClass("tan.EndpointOutputConstructor")).tpe
     val pei = TypeIdent(Symbol.requiredClass("tan.ProvidedEndpointInput")).tpe
     val peo = TypeIdent(Symbol.requiredClass("tan.ProvidedEndpointOutput")).tpe
+
+    val tapirVersion = ctrType.typeSymbol.annotations.collectFirst {
+      case annot if annot.tpe.typeSymbol == tapirVersionSym =>
+        val Apply(_, List(Literal(StringConstant(tapirVersion)))) = annot
+        tapirVersion
+    }.get
+
+    val useNewSecurity = tapirVersion match {
+      case "18" => false
+      case "19" => true
+      case v => errorAndAbort("Unsupported tapir version " + v)
+    }
 
     val fakeParamConcat = TypeIdent(Symbol.requiredClass("tan.TapirScala3Interop.FakeParamConcat")).tpe
     val paramConcat = TypeIdent(Symbol.requiredClass("sttp.tapir.typelevel.ParamConcat.Aux")).tpe
@@ -121,13 +138,19 @@ object generator {
               }
           }
       }
-      if (method.inputs.exists(_.isInstanceOf[MethodInput2.Security[TypeRepr]]))
-        errorAndAbort("Security inputs are not supported now")
+
+      val secInputs = method.inputs.collect {
+        case np: MethodInput2.Security[TypeRepr] =>
+          summon(typeApply(secType, np.tpe, TypeRepr.of[F])) match {
+            case None => errorAndAbort(s"Failed to find Security instance for type ${np.tpe}")
+            case Some(sec) => InputWithTree(np, sec)
+          }
+      }
 
       val indexedInputs = {
-        /* if (secInputs.size > 1) {
+        if (secInputs.size > 1) {
           errorAndAbort("Multiple secure endpoints are not supported now")
-        } */
+        }
 
         val indexedPathInputs = pathInputs.map { p =>
           IndexedInput(
@@ -141,12 +164,11 @@ object generator {
           case (np, i) => IndexedInput(np.input, np.term, i + indexedPathInputs.size)
         }
 
-        /*
         val indexedSecInputs = secInputs.map { np =>
-          IndexedInput(np.input, np.tree, -1)
-        }*/
+          IndexedInput(np.input, np.term, -1)
+        }
 
-        val indexedInputsUnordered = indexedPathInputs /* ++ indexedSecInputs */ ++ indexedNonPathInputs
+        val indexedInputsUnordered = indexedPathInputs ++ indexedSecInputs ++ indexedNonPathInputs
 
         method.inputs.map { i => indexedInputsUnordered.find(_.input == i).get }
       }
@@ -167,7 +189,22 @@ object generator {
         (lr, leftAr + rightAr, typeApply(paramConcat, l, r, lr), concat)
       }
 
-      val (withPathInputs, pathInputsLr, arityAfterPath) = method.pathSegments.foldLeft((endpointBase, TypeRepr.of[Unit], 0)) { (ewa, segment) =>
+      val withSecInputs = secInputs.headOption match {
+        case Some(secInput) =>
+          val secInputTerm = Select.unique(secInput.term, "input")
+          val secHandlerTerm = Select.unique(secInput.term, "handler").etaExpand(Symbol.noSymbol)
+
+          val inputUnderlying = TypeSelect(secInput.term, "VIn").tpe
+
+          val (lr, _, _, pc) = makeParamConcat(TypeRepr.of[Unit], inputUnderlying, 0)
+
+          val withSecIn = Apply(Select.overloaded(endpointBase, "securityIn", List(inputUnderlying, lr), List(secInputTerm)), List(pc))
+          Apply(TypeApply(Select.unique(withSecIn, "serverSecurityLogic"), List(ttree(secInput.input.tpe), TypeTree.of[F])), List(secHandlerTerm))
+        case None =>
+          endpointBase
+      }
+
+      val (withPathInputs, pathInputsLr, arityAfterPath) = method.pathSegments.foldLeft((withSecInputs, TypeRepr.of[Unit], 0)) { (ewa, segment) =>
         segment match {
           case PathSegment2.Raw(name) =>
             val (expr, prevLr, leftAr) = ewa
@@ -249,9 +286,6 @@ object generator {
         .map(_.input.tpe)
         .filter { _.typeSymbol != unitSym }
 
-      val inputTupleClass = defn.TupleClass(realInputType.size)
-      val inputTupleType = Applied(TypeIdent(inputTupleClass), realInputType.map(ttree)).tpe
-
       val monadF = summon(typeApply(catsMonad, TypeRepr.of[F])).get
 
       val requiredOutTpe = method.output.out.map(_.tpe).getOrElse(TypeRepr.of[Unit])
@@ -259,41 +293,82 @@ object generator {
       val requiredEitherTpe = typeApply(TypeRepr.of[Either[_, _]], requiredErrTpe, requiredOutTpe)
       val requiredResultType = typeApply(TypeRepr.of[F], requiredEitherTpe)
 
-      val workerLambdaMType = MethodType(List("x"))(_ => List(inputTupleType), _ => requiredResultType)
-
-      val workerLambda = Lambda(clsSym, workerLambdaMType, (sym, xs) => {
-        val x = xs.head.symbol
-
-        val args = indexedInputs.map {
-          case IndexedInput(_, _, ix) =>
-            Select.unique(Ref(x), "_" + (ix + 1))
+      val workerLambda = {
+        val innerTupleType = {
+          val inputTupleClass = defn.TupleClass(realInputType.size)
+          Applied(TypeIdent(inputTupleClass), realInputType.map(ttree)).tpe
         }
 
-        val call = Apply(Select(clsExpr.asTerm, method.callTarget), args)
+        val innerLambdaMType = MethodType(List("x"))(_ => List(innerTupleType), _ => requiredResultType)
 
-        def right(term: Term) =
-          Apply(TypeApply(tapir("right"), List(requiredErrTpe, requiredOutTpe).map(ttree)), List(term))
+        def innerLambdaBody(outerParamSym: Symbol, innerParamSym: Symbol) = {
+          // TODO: singleinput stuff
+          // val args = if (secInputs.nonEmpty) {
+          //   indexedInputs.map {
+          //     case IndexedInput(_, _, -1) =>
+          //       Select.unique(Ref(x), "_1")
+          //     case IndexedInput(_, _, ix) =>
+          //       Select.unique(Select.unique(Ref(x), "_2"), "_" + (ix + 1))
+          //   }
+          // } else {
+          //   indexedInputs.map {
+          //     case IndexedInput(_, _, ix) =>
+          //       Select.unique(Ref(x), "_" + (ix + 1))
+          //   }
+          // }
 
-        if (method.output.higher) {
-          if (method.output.either) {
-            call
-          } else {
-            val asRightLambdaTpe = MethodType(List("v"))(_ => List(requiredOutTpe), _ => requiredEitherTpe)
 
-            Apply(Apply(Select.unique(monadF, "map"), List(call)), List(Lambda(clsSym, asRightLambdaTpe, (_, xs) => right(Ref(xs.head.symbol)))))
+          val args = indexedInputs.map {
+            case IndexedInput(_, _, -1) =>
+              Ref(outerParamSym)
+            case IndexedInput(_, _, ix) =>
+              Select.unique(Ref(innerParamSym), "_" + (ix + 1))
           }
-        } else {
-          if (method.output.either) {
-            Apply(TypeApply(Select.unique(monadF, "pure"), List(ttree(requiredEitherTpe))), List(call))
-          } else {
-            val asRightLambdaTpe = MethodType(List("v"))(_ => List(requiredOutTpe), _ => requiredEitherTpe)
 
-            Apply(TypeApply(Select.unique(monadF, "pure"), List(ttree(requiredEitherTpe))), List(right(call)))
+          val call = Apply(Select(clsExpr.asTerm, method.callTarget), args)
+
+          def right(term: Term) =
+            Apply(TypeApply(tapir("right"), List(requiredErrTpe, requiredOutTpe).map(ttree)), List(term))
+
+          if (method.output.higher) {
+            if (method.output.either) {
+              call
+            } else {
+              val asRightLambdaTpe = MethodType(List("v"))(_ => List(requiredOutTpe), _ => requiredEitherTpe)
+
+              Apply(Apply(Select.unique(monadF, "map"), List(call)), List(Lambda(clsSym, asRightLambdaTpe, (_, xs) => right(Ref(xs.head.symbol)))))
+            }
+          } else {
+            if (method.output.either) {
+              Apply(TypeApply(Select.unique(monadF, "pure"), List(ttree(requiredEitherTpe))), List(call))
+            } else {
+              val asRightLambdaTpe = MethodType(List("v"))(_ => List(requiredOutTpe), _ => requiredEitherTpe)
+
+              Apply(TypeApply(Select.unique(monadF, "pure"), List(ttree(requiredEitherTpe))), List(right(call)))
+            }
           }
         }
-      })
 
-      Select.overloaded(withErrors, "serverLogic", List(TypeRepr.of[F]), List(workerLambda))
+        if (secInputs.nonEmpty) {
+          val innerFunctionClass = defn.FunctionClass(1, false, false)
+          val innerFunctionType = Applied(TypeIdent(innerFunctionClass), List(innerTupleType, requiredResultType).map(ttree)).tpe
+          val outerLambdaMType = MethodType(List("x"))(_ => List(secInputs.head.input.tpe), _ => innerFunctionType)
+
+          Lambda(Symbol.noSymbol, outerLambdaMType, (sym, oxs) => {
+            Lambda(sym, innerLambdaMType, (sym, ixs) => innerLambdaBody(oxs.head.symbol, ixs.head.symbol))
+          })
+        } else Lambda(Symbol.noSymbol, innerLambdaMType, (sym, xs) => innerLambdaBody(Symbol.noSymbol, xs.head.symbol))
+      }
+
+      if (secInputs.nonEmpty) {
+        Select.overloaded(withErrors, "serverLogic", Nil, List(workerLambda))
+      } else if (useNewSecurity) {
+        val unitIsUnit = '{implicitly[Unit =:= Unit]}.asTerm
+
+        Apply(Select.overloaded(withErrors, "serverLogic", List(TypeRepr.of[F]), List(workerLambda)), List(unitIsUnit))
+      } else {
+        Select.overloaded(withErrors, "serverLogic", List(TypeRepr.of[F]), List(workerLambda))
+      }
     }
 
     Expr.ofList(endpoints.map(_.asExprOf[S]))
