@@ -7,6 +7,7 @@ object attrs {
 
   object DefTags {
     trait JsonDefTag
+    trait PlainTextDefTag
   }
 
   sealed trait DefaultBody

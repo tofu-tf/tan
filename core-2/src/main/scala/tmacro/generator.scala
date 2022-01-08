@@ -9,21 +9,6 @@ import mirror1._
 import mirror2._
 
 object generator {
-  private val camelCaseWordBoundary: Regex = "[A-Z\\d]".r
-
-  def rename(name: String, conv: NamingConvention2): String = {
-    if (conv == NamingConvention2.AsIs) return name
-
-    val sep = conv match {
-      case NamingConvention2.Snake => "_"
-      case NamingConvention2.SpaceSnake => " "
-      case NamingConvention2.Kebab => "-"
-      case _ => "?"
-    }
-
-    camelCaseWordBoundary.replaceAllIn(name, sep + _.group(0).toLowerCase())
-  }
-
   def apply[C <: blackbox.Context, Cls: c.WeakTypeTag, F[_]](c: C)(mirror: ControllerMirror2[c.universe.Tree, c.universe.Type])(implicit _f: c.WeakTypeTag[F[_]]): c.Tree = {
     import c.universe._
 
@@ -66,7 +51,7 @@ object generator {
 
       val nonPathInputs = method.inputs.collect {
         case np: MethodInput2.Query[Type] =>
-          InputWithTree(np, q"_root_.sttp.tapir.query[${np.tpe}](${rename(np.name, mirror.namingConventions.query)})")
+          InputWithTree(np, q"_root_.sttp.tapir.query[${np.tpe}](${renamer.rename(np.name, mirror.namingConventions.query)})")
         case np: MethodInput2.Body[Type] =>
           val dealiased = np.tpe.dealias
 
@@ -168,13 +153,13 @@ object generator {
             Literal(Constant(r))
           case PathSegment2.Subst(s) =>
             val tpe = pathInputs.find(p => p.input.name == s).get.input.tpe
-            q"_root_.sttp.tapir.path[$tpe](${rename(s, mirror.namingConventions.pathSeg)})"
+            q"_root_.sttp.tapir.path[$tpe](${renamer.rename(s, mirror.namingConventions.pathSeg)})"
         }
 
         val pathInput = pathNodes.reduce((l, r) => q"$l / $r")
 
         val endpointWithMethod: Tree = {
-          val summary = method.summary.getOrElse(rename(method.name, NamingConvention2.SpaceSnake).capitalize)
+          val summary = method.summary.getOrElse(renamer.rename(method.name, NamingConvention2.SpaceSnake).capitalize)
           val methodName = method.method match {
             case HttpMethod1.Get => TermName("get")
             case HttpMethod1.Post => TermName("post")

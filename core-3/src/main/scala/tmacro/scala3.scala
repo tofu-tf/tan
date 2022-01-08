@@ -8,6 +8,6 @@ object scala3 {
     val mirror1 = tmacro.reflector[Cls, Eff](cls)
     val mirror2 = tmacro.postprocessor(mirror1)
 
-    tmacro.generator[Cls, Eff, S](cls, mirror2)
+    (new tmacro.generator[q.type])[Cls, Eff, S](cls, mirror2)
   }
 }

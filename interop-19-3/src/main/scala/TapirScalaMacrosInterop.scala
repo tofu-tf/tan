@@ -8,7 +8,7 @@ import sttp.tapir.EndpointOutput.StatusCode
 import sttp.tapir.typelevel.ParamConcat
 import tan.tmacro.mirror1.HttpMethod1
 
-object TapirScala3Interop {
+object TapirScalaMacrosInterop {
   class FakeParamConcat[L, R, LR](override val leftArity: Int, override val rightArity: Int) extends ParamConcat[L, R] {
     override type Out = LR
   }
@@ -53,6 +53,5 @@ object TapirScala3Interop {
   def coerceResultToSecure[F[_], LE, SE, R](monad: Monad[F], a: F[Either[LE, R]]): F[Either[Either[LE, SE], R]] =
     monad.map(a)(_.leftMap(_.asLeft))
   
-  def rightWrap[E, E2, A](e: Either[E2, A]): Either[Either[E2, E], A] = e.left.map(x => Left(x))
   def leftWrap[E, E2, A](e: Either[E, A]): Either[Either[E2, E], A] = e.left.map(x => Right(x))
 }
