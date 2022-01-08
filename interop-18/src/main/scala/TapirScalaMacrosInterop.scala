@@ -1,11 +1,13 @@
 package tan
 
 import cats.Monad
-import cats.syntax.either.*
-import sttp.tapir.*
+import cats.syntax.either._
+import sttp.tapir._
 import sttp.tapir.CodecFormat.TextPlain
-import sttp.tapir.EndpointOutput.{OneOfMapping, StatusCode}
+import sttp.tapir.EndpointOutput.StatusCode
 import sttp.tapir.typelevel.ParamConcat
+
+import tmacro.mirror1._
 
 object TapirScalaMacrosInterop {
   class FakeParamConcat[L, R, LR](override val leftArity: Int, override val rightArity: Int) extends ParamConcat[L, R] {
@@ -35,13 +37,13 @@ object TapirScalaMacrosInterop {
       oneOfMappingValueMatcher(sttp.model.StatusCode.Unauthorized, security.map(Right(_))(_.value)) { case Right(_) => true }
     )
 
-  def query[T: [T] =>> Codec[List[String], T, TextPlain]](name: String): EndpointInput.Query[T] =
+  def query[T](name: String)(implicit c: Codec[List[String], T, TextPlain]): EndpointInput.Query[T] =
     sttp.tapir.query[T](name)
 
-  def path[T: [T] =>> Codec[String, T, TextPlain]](name: String): EndpointInput.PathCapture[T] =
+  def path[T](name: String)(implicit c: Codec[String, T, TextPlain]): EndpointInput.PathCapture[T] =
     sttp.tapir.path[T](name)
 
-  def plainBody[T: [T] =>> Codec[String, T, TextPlain]]: EndpointIO.Body[String, T] =
+  def plainBody[T](implicit c: Codec[String, T, TextPlain]): EndpointIO.Body[String, T] =
     sttp.tapir.plainBody[T]
 
   def stringToPath(s: String): EndpointInput.FixedPath[Unit] =

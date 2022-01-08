@@ -9,8 +9,8 @@ import scala.language.experimental.macros
 package object tan {
   import attrs._
 
-  @tapirVersion("19")
+  @tapirVersion("18")
   trait Controller[F[_]]
 
-  def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[Any, Eff]] = macro tan.tmacro.scala2.compileImpl2[Cls, Eff]
+  def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[_, _, _, Any, Eff]] = macro tan.tmacro.scala2.compileImpl2[Cls, Eff]
 }
