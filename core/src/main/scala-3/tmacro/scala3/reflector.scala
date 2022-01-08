@@ -1,8 +1,9 @@
 package tan
 package tmacro
+package scala3
 
-import tmacro.mirror1._
-import attrs._
+import mirror1.*
+import attrs.*
 
 import scala.quoted.*
 

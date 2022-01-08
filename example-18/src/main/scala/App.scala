@@ -7,8 +7,6 @@ import sttp.tapir.openapi.OpenAPI
 import sttp.tapir.openapi.circe.yaml._
 import org.http4s.ember.server.*
 import org.http4s.*
-import tan.*
-import tan.attrs.*
 
 import scala.language.experimental.macros
 import scala.concurrent.duration._

@@ -1,7 +1,7 @@
 package tan
 package tmacro
 
-import tmacro.mirror2.NamingConvention2
+import mirror2.NamingConvention2
 
 import scala.util.matching.Regex
 

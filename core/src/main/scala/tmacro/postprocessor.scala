@@ -1,8 +1,8 @@
 package tan
 package tmacro
 
-import tmacro.mirror1.{ControllerMirror1, AnnotationMirror1, DefaultBodyMirror1}
-import tmacro.mirror2.{ControllerMirror2, PathSegment2, MethodOutputSide2, NamingConvention2, MethodOutput2, NamingConventions2, MethodMirror2, MethodInput2}
+import mirror1._
+import mirror2._
 
 object postprocessor {
   def apply[Tree, Tpe](mirror1: ControllerMirror1[Tree, Tpe]): ControllerMirror2[Tree, Tpe] = {

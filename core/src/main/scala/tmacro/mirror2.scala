@@ -1,7 +1,7 @@
 package tan
 package tmacro
 
-import tmacro.mirror1.{HttpMethod1, DefaultBodyMirror1}
+import tmacro.mirror1._
 
 object mirror2 {
   sealed trait NamingConvention2

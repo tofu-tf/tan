@@ -1,13 +1,11 @@
 package tan
 package tmacro
-
-import tmacro.mirror1.{HttpMethod1, ControllerMirror1, AnnotationMirror1, DefaultBodyMirror1}
-import tmacro.mirror2.{ControllerMirror2, MethodInput2, NamingConvention2, PathSegment2}
+package scala3
 
 import scala.quoted.*
-import attrs.{tapirVersion, DefTags}
-
-import scala.util.matching.Regex
+import mirror1.*
+import mirror2.*
+import attrs.*
 
 class generator[Q <: Quotes](using val q: Q) {
   import q.reflect.*

@@ -1,5 +1,6 @@
 package tan
 package tmacro
+package scala2
 
 import scala.reflect.macros.blackbox
 import attrs._

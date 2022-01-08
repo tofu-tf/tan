@@ -9,10 +9,10 @@ import scala.language.experimental.macros
 package object tan {
   import attrs._
 
-  @tapirVersion("18")
+  @tapirVersion("19")
   trait Controller[F[_]]
 
-  def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[_, _, _, Any, Eff]] = macro tan.tmacro.scala2.compileImpl2[Cls, Eff]
+  def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[Any, Eff]] = macro tan.tmacro.scala2.compileImpl2[Cls, Eff]
 
   // wrappers for EndpointIO
 
@@ -40,8 +40,15 @@ package object tan {
     }
   }
 
-  trait Security[VIn, VOut, F[_]] {
+  trait Security[VOut, F[_]] {
+    type VIn
+    type VErr
+
     val input: EndpointInput[VIn]
-    def handler(in: VIn): F[Either[Unit, VOut]]
+    val errorOutput: EndpointOutput[VErr]
+    def handler(in: VIn): F[Either[VErr, VOut]]
+  }
+  object Security {
+    type Aux[VIn_, VOut, VErr_, F[_]] = Security[VOut, F] { type VIn = VIn_; type VErr = VErr_ }
   }
 }
