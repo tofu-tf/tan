@@ -318,7 +318,6 @@ object generator {
       val requiredErrTpe = method.output.err.map(_.tpe).getOrElse(TypeRepr.of[Unit])
       val requiredEitherTpe = typeApply(TypeRepr.of[Either[_, _]], requiredErrTpe, requiredOutTpe)
 
-      // val requiredResultType = typeApply(TypeRepr.of[F], requiredEitherTpe)
       val requiredResultType =
         secInput match {
           case Some(secInput) =>
@@ -337,7 +336,11 @@ object generator {
         }
 
       val workerLambda = {
-        val innerTupleType = {
+        val innerTupleType = if (realInputType.isEmpty) {
+          TypeRepr.of[Unit]
+        } else if (realInputType.size == 1) {
+          realInputType.head
+        } else {
           val inputTupleClass = defn.TupleClass(realInputType.size)
           Applied(TypeIdent(inputTupleClass), realInputType.map(ttree)).tpe
         }
@@ -345,26 +348,16 @@ object generator {
         val innerLambdaMType = MethodType(List("x"))(_ => List(innerTupleType), _ => requiredResultType)
 
         def innerLambdaBody(outerParamSym: Symbol, innerParamSym: Symbol, lamSym: Symbol) = {
-          // TODO: singleinput stuff
-          // val args = if (secInputs.nonEmpty) {
-          //   indexedInputs.map {
-          //     case IndexedInput(_, _, -1) =>
-          //       Select.unique(Ref(x), "_1")
-          //     case IndexedInput(_, _, ix) =>
-          //       Select.unique(Select.unique(Ref(x), "_2"), "_" + (ix + 1))
-          //   }
-          // } else {
-          //   indexedInputs.map {
-          //     case IndexedInput(_, _, ix) =>
-          //       Select.unique(Ref(x), "_" + (ix + 1))
-          //   }
-          // }
+          val hasMultipleNonSecInputs = realInputType.size > 1
 
           val args = indexedInputs.map {
             case IndexedInput(_, _, -1) =>
               Ref(outerParamSym)
             case IndexedInput(_, _, ix) =>
-              Select.unique(Ref(innerParamSym), "_" + (ix + 1))
+              if (hasMultipleNonSecInputs)
+                Select.unique(Ref(innerParamSym), "_" + (ix + 1))
+              else
+                Ref(innerParamSym)
           }
 
           val call = Apply(Select(clsExpr.asTerm, method.callTarget), args)
@@ -387,8 +380,7 @@ object generator {
             } else {
               val asRightLambdaTpe = MethodType(List("v"))(_ => List(requiredOutTpe), _ => requiredEitherTpe)
 
-              // NOTE: typeapply forgotten here
-              Apply(Apply(Select.unique(monadF, "map"), List(call)), List(Lambda(clsSym, asRightLambdaTpe, (_, xs) => right(Ref(xs.head.symbol)))))
+              Apply(Apply(TypeApply(Select.unique(monadF, "map"), List(ttree(requiredOutTpe), ttree(requiredEitherTpe))), List(call)), List(Lambda(lamSym, asRightLambdaTpe, (_, xs) => right(Ref(xs.head.symbol)))))
             }
           } else {
             if (method.output.either) {

@@ -11,6 +11,7 @@ import tan.*
 import tan.attrs.*
 
 import scala.language.experimental.macros
+import scala.concurrent.duration._
 
 object App extends IOApp {
   case class SecureThingy(wtf: String)
@@ -49,6 +50,12 @@ object App extends IOApp {
 
     @delete("a/{foo}/c/{qux}")
     def zw(foo: String, @query bar: String, qux: Int): Either[StatusCode, Unit] = Left(StatusCode.Ok)
+
+    @delete("a")
+    def zw0(): Unit = ()
+
+    @delete("a")
+    def zw1(@query single: Int): IO[Unit] = IO.unit
   }
 
   def run(args: List[String]): IO[ExitCode] = {
@@ -73,6 +80,6 @@ object App extends IOApp {
     EmberServerBuilder.default[IO]
       .withHttpApp(app)
       .build
-      .use { _ => IO.never }
+      .use { _ => IO.sleep(5.seconds).as(ExitCode.Success) }
   }
 }
