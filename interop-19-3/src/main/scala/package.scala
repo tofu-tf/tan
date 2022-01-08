@@ -4,7 +4,6 @@ import sttp.tapir.json.circe.jsonBody
 import sttp.tapir.server.ServerEndpoint
 import sttp.tapir.{statusCode, EndpointOutput, Schema, EndpointInput}
 
-import scala.annotation.StaticAnnotation
 import scala.language.experimental.macros
 
 package object tan {
@@ -13,8 +12,7 @@ package object tan {
   @tapirVersion("19")
   trait Controller[F[_]]
 
-  def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[Any, Eff]] = macro tan.tmacro.compileImpl2[Cls, Eff]
-  inline def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[Any, Eff]] = ${ tan.tmacro.compileImpl3[Cls, Eff] }
+  inline def compile[Cls <: Controller[Eff], Eff[_]](cls: Cls): List[ServerEndpoint[Any, Eff]] = ${ tan.tmacro.scala3.compileImpl3[Cls, Eff, ServerEndpoint[Any, Eff]]('{ cls }) }
 
   // wrappers for EndpointIO
 
@@ -42,8 +40,15 @@ package object tan {
     }
   }
 
-  trait Security[VIn, VOut, F[_]] {
+  trait Security[VOut, F[_]] {
+    type VIn
+    type VErr
+
     val input: EndpointInput[VIn]
-    def handler(in: VIn): F[Either[Unit, VOut]]
+    val errorOutput: EndpointOutput[VErr]
+    def handler(in: VIn): F[Either[VErr, VOut]]
+  }
+  object Security {
+    type Aux[VIn_, VOut, VErr_, F[_]] = Security[VOut, F] { type VIn = VIn_; type VErr = VErr_ }
   }
 }

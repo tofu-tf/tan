@@ -204,14 +204,59 @@ object generator {
           case Some(t) => Select.unique(t, "instance")
         }
 
-      val withErrors = method.output.err match {
-        case Some(err) => {
-          val (lr, _, _, pc) = makeParamConcat(TypeRepr.of[Unit], err.tpe, 0)
+      val (withErrors, totalErrorOut) = method.output.err match {
+        case Some(err) =>
+          val (errTpe, encoder, lr, pc) = secInput match {
+            case Some(secInput) =>
+              val secError = TypeSelect(secInput.term, "VErr").tpe
 
-          Apply(Select.overloaded(endpointBase, "errorOut", List(err.tpe, lr), List(inferOutputTypeEncoder(err.tpe))), List(pc))
-        }
+              val secErrEncoder = Select.unique(secInput.term, "errorOutput")
+              val logicErrEncoder = inferOutputTypeEncoder(err.tpe)
 
-        case None => endpointBase
+              val eitherEncoder = Apply(
+                TypeApply(tapir("eitherError"), List(ttree(err.tpe), ttree(secError))),
+                List(
+                  logicErrEncoder,
+                  secErrEncoder
+                )
+              )
+
+              val eitherTpe = typeApply(TypeRepr.of[Either[_, _]], err.tpe, secError)
+
+              val (lr, _, _, pc) = makeParamConcat(TypeRepr.of[Unit], eitherTpe, 0)
+
+              (eitherTpe, eitherEncoder, lr, pc)
+            case None =>
+              val errTpe = err.tpe
+              val (lr, _, _, pc) = makeParamConcat(TypeRepr.of[Unit], errTpe, 0)
+              val encoder = inferOutputTypeEncoder(errTpe)
+
+              (errTpe, encoder, lr, pc)
+          }
+
+          (Apply(Select.overloaded(endpointBase, "errorOut", List(errTpe, lr), List(encoder)), List(pc)), errTpe)
+
+        case None =>
+          secInput match {
+            case Some(secInput) =>
+              val secError = TypeSelect(secInput.term, "VErr").tpe
+
+              val secErrEncoder = Select.unique(secInput.term, "errorOutput")
+
+              val eitherEncoder = Apply(
+                TypeApply(tapir("onlySecError"), List(ttree(secError))),
+                List(
+                  secErrEncoder
+                )
+              )
+
+              val eitherTpe = typeApply(TypeRepr.of[Either[_, _]], TypeRepr.of[Unit], secError)
+
+              val (lr, _, _, pc) = makeParamConcat(TypeRepr.of[Unit], eitherTpe, 0)
+
+              (Apply(Select.overloaded(endpointBase, "errorOut", List(eitherTpe, lr), List(eitherEncoder)), List(pc)), eitherTpe)
+            case None => (endpointBase, TypeRepr.of[Unit])
+          }
       }
 
       val monadF = summon(typeApply(catsMonad, TypeRepr.of[F])).get
@@ -244,12 +289,19 @@ object generator {
 
           val (lr, _, _, pc) = makeParamConcat(TypeRepr.of[Unit], inputUnderlying, 0)
 
-          val withSecErr = Select.overloaded(withErrors, "errorOutEither", List(errorUnderlying), List(inferOutputTypeEncoder(errorUnderlying)))
-          val withSecIn = Apply(Select.overloaded(withSecErr, "securityIn", List(inputUnderlying, lr), List(secInputTerm)), List(pc))
+          tapirVersion match {
+            case "18" =>
+              val withSecIn = Apply(Select.overloaded(withErrors, "in", List(inputUnderlying, lr), List(secInputTerm)), List(pc))
 
-          println(secHandlerTermWrapped.show)
+              Apply(TypeApply(Select.unique(withSecIn, "serverLogicForCurrent"), List(ttree(secInput.input.tpe), TypeTree.of[F])), List(secHandlerTermWrapped))
+            case "19" =>
+              // val withSecErr = Select.overloaded(withErrors, "errorOutEither", List(errorUnderlying), List(inferOutputTypeEncoder(errorUnderlying)))
+              val withSecIn = Apply(Select.overloaded(withErrors, "securityIn", List(inputUnderlying, lr), List(secInputTerm)), List(pc))
 
-          Apply(TypeApply(Select.unique(withSecIn, "serverSecurityLogic"), List(ttree(secInput.input.tpe), TypeTree.of[F])), List(secHandlerTermWrapped))
+              println(secHandlerTermWrapped.show)
+
+              Apply(TypeApply(Select.unique(withSecIn, "serverSecurityLogic"), List(ttree(secInput.input.tpe), TypeTree.of[F])), List(secHandlerTermWrapped))
+          }
         case None =>
           withErrors
       }
@@ -335,6 +387,8 @@ object generator {
             typeApply(TypeRepr.of[F], requiredEitherTpe)
         }
 
+      println("RRT:" + requiredResultType.show)
+
       val workerLambda = {
         val innerTupleType = if (realInputType.isEmpty) {
           TypeRepr.of[Unit]
@@ -345,34 +399,23 @@ object generator {
           Applied(TypeIdent(inputTupleClass), realInputType.map(ttree)).tpe
         }
 
-        val innerLambdaMType = MethodType(List("x"))(_ => List(innerTupleType), _ => requiredResultType)
-
-        def innerLambdaBody(outerParamSym: Symbol, innerParamSym: Symbol, lamSym: Symbol) = {
+        def innerLambdaBody(outerParamTree: Term, innerParamTree: Term, lamSym: Symbol) = {
           val hasMultipleNonSecInputs = realInputType.size > 1
 
           val args = indexedInputs.map {
             case IndexedInput(_, _, -1) =>
-              Ref(outerParamSym)
+              outerParamTree
             case IndexedInput(_, _, ix) =>
               if (hasMultipleNonSecInputs)
-                Select.unique(Ref(innerParamSym), "_" + (ix + 1))
+                Select.unique(innerParamTree, "_" + (ix + 1))
               else
-                Ref(innerParamSym)
+                innerParamTree
           }
 
           val call = Apply(Select(clsExpr.asTerm, method.callTarget), args)
 
           def right(term: Term) =
             Apply(TypeApply(tapir("right"), List(requiredErrTpe, requiredOutTpe).map(ttree)), List(term))
-
-          def secRight(term: Term) = secInput match {
-            case Some(secInput) =>
-              val secErrTpe = TypeSelect(secInput.term, "VErr").tpe
-
-              Apply(TypeApply(tapir("right"), List(secErrTpe, requiredEitherTpe).map(ttree)), List(term))
-
-            case None => term
-          }
 
           val coercedToIEO = if (method.output.higher) {
             if (method.output.either) {
@@ -392,44 +435,64 @@ object generator {
             }
           }
 
-          val rr = secInput match {
+          secInput match {
             case Some(secInput) =>
-              val errorUnderlying = TypeSelect(secInput.term, "VErr").tpe
+              val secError = TypeSelect(secInput.term, "VErr").tpe
 
-              val errorOrOut = typeApply(TypeRepr.of[Either[_, _]], requiredErrTpe, requiredOutTpe)
-              val errorsOrOut = typeApply(TypeRepr.of[Either[_, _]], typeApply(TypeRepr.of[Either[_, _]], requiredErrTpe, errorUnderlying), requiredOutTpe)
+              val res = Apply(
+                TypeApply(tapir("coerceResultToSecure"), List(TypeTree.of[F], ttree(requiredErrTpe), ttree(secError), ttree(requiredOutTpe))),
+                List(monadF, coercedToIEO)
+              )
 
-              val asRightLambdaTpe = MethodType(List("v"))(_ => List(errorOrOut), _ => errorsOrOut)
-              def rightWrap(term: Term) = Apply(TypeApply(tapir("rightWrap"), List(errorUnderlying, requiredErrTpe, requiredOutTpe).map(ttree)), List(term))
+              println("coerced:" + res.show)
 
-              Apply(Apply(TypeApply(Select.unique(monadF, "map"), List(ttree(errorOrOut), ttree(errorsOrOut))), List(coercedToIEO)), List(Lambda(lamSym, asRightLambdaTpe, (_, xs) => rightWrap(Ref(xs.head.symbol)))))
-            case None =>
-              coercedToIEO
+              res
+            case None => coercedToIEO
           }
+        }
 
-          println(rr.show)
-          println(rr.tpe.show)
-          println(requiredResultType.show)
+        val innerLambdaMType = (secInput, tapirVersion) match {
+          case (None, _) | (Some(_), "19") =>
+            MethodType(List("x"))(_ => List(innerTupleType), _ => requiredResultType)
+          case (Some(secInput), _) =>
+            val outerTupleClass = defn.TupleClass(2)
+            val outerTupleType = Applied(TypeIdent(outerTupleClass), List(ttree(secInput.input.tpe), ttree(innerTupleType))).tpe
 
-          rr
+            MethodType(List("x"))(_ => List(outerTupleType), _ => requiredResultType)
         }
 
         secInput match {
           case Some(secInput) =>
-            val innerFunctionClass = defn.FunctionClass(1, false, false)
-            val innerFunctionType = Applied(TypeIdent(innerFunctionClass), List(innerTupleType, requiredResultType).map(ttree)).tpe
-            val outerLambdaMType = MethodType(List("x"))(_ => List(secInput.input.tpe), _ => innerFunctionType)
+            tapirVersion match {
+              case "18" =>
+                val r = Lambda(Symbol.noSymbol, innerLambdaMType, (sym, ixs) => {
+                  val ref = Ref(ixs.head.symbol)
+                  innerLambdaBody(Select.unique(ref, "_1"), Select.unique(ref, "_2"), sym)
+                })
 
-            Lambda(Symbol.noSymbol, outerLambdaMType, (sym, oxs) => {
-              Lambda(sym, innerLambdaMType, (sym, ixs) => innerLambdaBody(oxs.head.symbol, ixs.head.symbol, sym))
-            })
+                println("PRE:" + withOutputs.tpe.show)
+                println(r.show)
+
+                r
+              case "19" =>
+                val innerFunctionClass = defn.FunctionClass(1, false, false)
+                val innerFunctionType = Applied(TypeIdent(innerFunctionClass), List(innerTupleType, requiredResultType).map(ttree)).tpe
+                val outerLambdaMType = MethodType(List("x"))(_ => List(secInput.input.tpe), _ => innerFunctionType)
+
+                Lambda(Symbol.noSymbol, outerLambdaMType, (sym, oxs) => {
+                  Lambda(sym, innerLambdaMType, (sym, ixs) => innerLambdaBody(Ref(oxs.head.symbol), Ref(ixs.head.symbol), sym))
+                })
+            }
           case None =>
-            Lambda(Symbol.noSymbol, innerLambdaMType, (sym, xs) => innerLambdaBody(Symbol.noSymbol, xs.head.symbol, sym))
+            Lambda(Symbol.noSymbol, innerLambdaMType, (sym, xs) => innerLambdaBody('{ ??? }.asTerm, Ref(xs.head.symbol), sym))
         }
       }
 
       if (secInput.nonEmpty) {
-        Select.overloaded(withOutputs, "serverLogic", Nil, List(workerLambda))
+        println("WLA:" + workerLambda.tpe.show)
+        val x = Select.overloaded(withOutputs, "serverLogic", Nil, List(workerLambda))
+        println(x.tpe.show)
+        x
       } else if (useNewSecurity) {
         val unitIsUnit = '{implicitly[Unit =:= Unit]}.asTerm
 

@@ -51,32 +51,40 @@ lazy val interop18_2 = project.in(file("interop-18-2"))
 
 lazy val interop18_3 = project.in(file("interop-18-3"))
   .dependsOn(core3)
-  .settings(tapir19)
+  .settings(tapir18)
   .settings(
     idePackagePrefix := Some("tan"),
     name := "tan-tapir18-3",
     scalaVersion := "3.1.0"
   )
 
-lazy val interop19 = project.in(file("interop-19"))
+lazy val interop19_3 = project.in(file("interop-19-3"))
+  .dependsOn(core3)
   .settings(tapir19)
-  .dependsOn(core2)
   .settings(
     idePackagePrefix := Some("tan"),
-    name := "tan-tapir19",
-    scalaVersion := "3.1.0",
-    scalacOptions += "-Ytasty-reader"
+    name := "tan-tapir19-3",
+    scalaVersion := "3.1.0"
   )
 
 lazy val example18 = project.in(file("example-18"))
   .dependsOn(interop18_3)
   .settings(
     scalaVersion := "3.1.0",
-    // libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-http4s-server" % "0.18.3",
-    // libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-openapi-docs" % "0.18.3",
-    // libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-openapi-circe-yaml" % "0.18.3",
-    // libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-http4s-server" % "0.18.3",
-    // libraryDependencies += "org.http4s" %% "http4s-ember-server" % "0.22.7"
+    libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-http4s-server" % "0.18.3",
+    libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-openapi-docs" % "0.18.3",
+    libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-openapi-circe-yaml" % "0.18.3",
+    libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-http4s-server" % "0.18.3",
+    libraryDependencies += "org.http4s" %% "http4s-ember-server" % "0.22.7",
+    libraryDependencies += "org.slf4j" % "slf4j-simple" % "1.7.32",
+    scalacOptions += "-Xcheck-macros",
+    scalacOptions += "-Ycheck:all",
+  )
+
+lazy val example19 = project.in(file("example-19"))
+  .dependsOn(interop19_3)
+  .settings(
+    scalaVersion := "3.1.0",
     libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-http4s-server" % "0.19.1",
     libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-openapi-docs" % "0.19.1",
     libraryDependencies += "com.softwaremill.sttp.tapir" %% "tapir-openapi-circe-yaml" % "0.19.1",
@@ -86,6 +94,3 @@ lazy val example18 = project.in(file("example-18"))
     scalacOptions += "-Xcheck-macros",
     scalacOptions += "-Ycheck:all",
   )
-
-// lazy val example19 = project.in(file("example-19"))
-//  .dependsOn(interop19)

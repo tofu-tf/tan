@@ -4,7 +4,7 @@ import cats.Monad
 import cats.syntax.either.*
 import sttp.tapir.*
 import sttp.tapir.CodecFormat.TextPlain
-import sttp.tapir.EndpointOutput.{OneOfMapping, StatusCode}
+import sttp.tapir.EndpointOutput.StatusCode
 import sttp.tapir.typelevel.ParamConcat
 import tan.tmacro.mirror1.HttpMethod1
 
@@ -13,7 +13,7 @@ object TapirScala3Interop {
     override type Out = LR
   }
 
-  def makeEndpoint(method: HttpMethod1, tags: List[String], summary: String): Endpoint[Unit, Unit, Unit, Any] = {
+  def makeEndpoint(method: HttpMethod1, tags: List[String], summary: String): Endpoint[Unit, Unit, Unit, Unit, Any] = {
     val withMethod = method match {
       case HttpMethod1.Get => endpoint.get
       case HttpMethod1.Post => endpoint.post
@@ -26,14 +26,14 @@ object TapirScala3Interop {
 
   def eitherError[A, B](logic: EndpointOutput[A], security: EndpointOutput[B]): EndpointOutput[Either[A, B]] =
     oneOf(
-      oneOfMappingValueMatcher(sttp.model.StatusCode.InternalServerError, logic.map(Left(_))(_.value)) { case Left(_) => true },
-      oneOfMappingValueMatcher(sttp.model.StatusCode.Unauthorized, security.map(Right(_))(_.value)) { case Right(_) => true }
+      oneOfVariantValueMatcher(sttp.model.StatusCode.InternalServerError, logic.map(Left(_))(_.value)) { case Left(_) => true },
+      oneOfVariantValueMatcher(sttp.model.StatusCode.Unauthorized, security.map(Right(_))(_.value)) { case Right(_) => true }
     )
 
   def onlySecError[B](security: EndpointOutput[B]): EndpointOutput[Either[Unit, B]] =
     oneOf(
-      oneOfMappingValueMatcher(sttp.model.StatusCode.InternalServerError, emptyOutput.map(Left(_))(_.value)) { case Left(_) => true },
-      oneOfMappingValueMatcher(sttp.model.StatusCode.Unauthorized, security.map(Right(_))(_.value)) { case Right(_) => true }
+      oneOfVariantValueMatcher(sttp.model.StatusCode.InternalServerError, emptyOutput.map(Left(_))(_.value)) { case Left(_) => true },
+      oneOfVariantValueMatcher(sttp.model.StatusCode.Unauthorized, security.map(Right(_))(_.value)) { case Right(_) => true }
     )
 
   def query[T: [T] =>> Codec[List[String], T, TextPlain]](name: String): EndpointInput.Query[T] =
