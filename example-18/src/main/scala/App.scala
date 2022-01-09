@@ -1,15 +1,14 @@
-import cats.effect.*
+import cats.effect._
 import sttp.model.StatusCode
-import sttp.tapir.{query as fuk2, json as fuk, *}
-import sttp.tapir.server.http4s.*
+import sttp.tapir.{query => fuk2, json => fuk, _}
+import sttp.tapir.server.http4s._
 import sttp.tapir.docs.openapi._
 import sttp.tapir.openapi.OpenAPI
 import sttp.tapir.openapi.circe.yaml._
-import org.http4s.ember.server.*
-import org.http4s.*
-
-import tan.*
-import tan.attrs.*
+import org.http4s.ember.server._
+import org.http4s._
+import tan._
+import tan.attrs._
 
 import scala.language.experimental.macros
 import scala.concurrent.duration._

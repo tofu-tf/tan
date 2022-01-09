@@ -25,7 +25,7 @@ object generator {
     val eocType = findType(q"(???): _root_.tan.EndpointOutputConstructor[_, _]")
     val peiType = findType(q"(???): _root_.tan.ProvidedEndpointInput[_]")
     val peoType = findType(q"(???): _root_.tan.ProvidedEndpointOutput[_]")
-    val secType = findType(q"(???): _root_.tan.Security[_, _, ({type L[A] = A})#L]")
+    val secType = findType(q"(???): _root_.tan.Security[_, ({type L[A] = A})#L]")
 
     val tapirVersion = ctrType.typeSymbol.annotations.map(_.tree).collectFirst {
       case q"new $annot($arg)" if annot.symbol == symbolOf[tapirVersion] =>
@@ -84,17 +84,18 @@ object generator {
 
       val secInputs = method.inputs.collect {
         case np: MethodInput2.Security[Type] =>
-          c.inferImplicitValue(appliedType(secType.typeConstructor, WildcardType, np.tpe, fTpe)) match {
+          c.inferImplicitValue(appliedType(secType.typeConstructor, np.tpe, fTpe)) match {
             case EmptyTree => c.abort(c.enclosingPosition, s"Failed to find Security instance for type ${np.tpe}")
             case sec => InputWithTree(np, sec)
           }
       }
+      val secInput = if (secInputs.size > 1) {
+        c.abort(c.enclosingPosition, "Multiple secure endpoints are not supported now")
+      } else {
+        secInputs.headOption
+      }
 
       val indexedInputs = {
-        if (secInputs.size > 1) {
-          c.abort(c.enclosingPosition, "Multiple secure endpoints are not supported now")
-        }
-
         val indexedPathInputs = pathInputs.map { p =>
           IndexedInput(
             input = p.input,
@@ -107,14 +108,16 @@ object generator {
           case (np, i) => IndexedInput(np.input, np.tree, i + indexedPathInputs.size)
         }
 
-        val indexedSecInputs = secInputs.map { np =>
+        val indexedSecInput = secInput.map { np =>
           IndexedInput(np.input, np.tree, -1)
         }
 
-        val indexedInputsUnordered = indexedPathInputs ++ indexedSecInputs ++ indexedNonPathInputs
+        val indexedInputsUnordered = indexedPathInputs ++ indexedSecInput ++ indexedNonPathInputs
 
         method.inputs.map { i => indexedInputsUnordered.find(_.input == i).get }
       }
+
+      val monadForF = q"_root_.cats.Monad[$fTpe]"
 
       def tupleMappingTree(hasSec: Boolean, multiInput: Boolean) = {
         val args = if (hasSec) {
@@ -132,7 +135,6 @@ object generator {
           indexedInputs.map(i => q"t")
 
         val rawBody = q"${method.callTarget}(..$args)"
-        val monadForF = q"_root_.cats.Monad[$fTpe]"
 
         val wrappedBody = method.output match {
           case MethodOutput2(true, true, _, _) => rawBody
@@ -141,9 +143,15 @@ object generator {
           case MethodOutput2(false, false, _, _) => q"monadF.pure($rawBody.asRight)"
         }
 
+        val secErr = secInput.map(x => c.typecheck(x.tree.duplicate).tpe.member(TypeName("VErr")).typeSignature).getOrElse(typeOf[Unit])
+
         val resultLambda = if (hasSec && useNewSecurity) {
-          q"(s => { i => { val t = (s, i); $wrappedBody } })"
-        } else q"(t => $wrappedBody)"
+          q"(s => { i => { val t = (s, i); monadF.fmap($wrappedBody)(x => x.left.map(l => Left(l))) } })"
+        } else if (hasSec) {
+          q"(t => monadF.fmap($wrappedBody)(x => x.left.map(l => Left(l))))"
+        } else {
+          q"(t => $wrappedBody)"
+        }
 
         q"{ import _root_.cats.syntax.either._; val monadF = $monadForF; $resultLambda }"
       }
@@ -181,18 +189,6 @@ object generator {
           withDefnTag
         }
 
-        val withInputs = if (useNewSecurity) {
-          val withPath = q"$endpointWithMethod.in($pathInput)"
-          val withNonPathInputs = nonPathInputs.foldLeft(withPath)((e, i) => q"$e.in(${i.tree})")
-
-          secInputs.foldLeft(withNonPathInputs)((e, i) => q"$e.securityIn(${i.tree}.input).serverSecurityLogic(${i.tree}.handler)")
-        } else {
-          val withSecInputs = secInputs.foldLeft(endpointWithMethod)((e, i) => q"$e.in(${i.tree}.input).serverLogicForCurrent(${i.tree}.handler)")
-          val withPath = q"$withSecInputs.in($pathInput)"
-
-          nonPathInputs.foldLeft(withPath)((e, i) => q"$e.in(${i.tree})")
-        }
-
         def inferOutputTypeEncoder(tpe: Type): Tree = {
           c.inferImplicitValue(appliedType(peoType.typeConstructor, tpe)) match {
             case EmptyTree => mirror.defaultBody match {
@@ -206,20 +202,47 @@ object generator {
           }
         }
 
+        val withErrors = method.output.err match {
+          case Some(err) =>
+            secInput match {
+              case Some(secInput) =>
+                q"$endpointWithMethod.errorOut(tan.TapirScalaMacrosInterop.eitherError(${inferOutputTypeEncoder(err.tpe)}, ${secInput.tree}.errorOutput))"
+              case None =>
+                q"$endpointWithMethod.errorOut(${inferOutputTypeEncoder(err.tpe)})"
+            }
+          case None =>
+            secInput match {
+              case Some(secInput) =>
+                q"$endpointWithMethod.errorOut(tan.TapirScalaMacrosInterop.onlySecError(${secInput.tree}.errorOutput))"
+              case None =>
+                endpointWithMethod
+            }
+        }
+
+        val appErr = method.output.err.map(x => x.tpe).getOrElse(typeOf[Unit])
+        val secErr = secInput.map(x => c.typecheck(x.tree.duplicate).tpe.member(TypeName("VErr")).typeSignature).getOrElse(typeOf[Unit])
+
+        val withInputs = if (useNewSecurity) {
+          val withPath = q"$withErrors.in($pathInput)"
+          val withNonPathInputs = nonPathInputs.foldLeft(withPath)((e, i) => q"$e.in(${i.tree})")
+
+          secInput.foldLeft(withNonPathInputs)((e, i) => q"$e.securityIn(${i.tree}.input).serverSecurityLogic(x => $monadForF.map(${i.tree}.handler(x))(x => x.left.map(x => Right(x): Either[$appErr, $secErr])))")
+        } else {
+          val withSecInputs = secInput.foldLeft(withErrors)((e, i) => q"$e.in(${i.tree}.input).serverLogicForCurrent(x => $monadForF.map(${i.tree}.handler(x))(x => x.left.map(x => Right(x): Either[$appErr, $secErr])))")
+          val withPath = q"$withSecInputs.in($pathInput)"
+
+          nonPathInputs.foldLeft(withPath)((e, i) => q"$e.in(${i.tree})")
+        }
+
         val withOutputs = method.output.out match {
           case Some(out) => q"$withInputs.out(${inferOutputTypeEncoder(out.tpe)})"
           case None => withInputs
         }
 
-        val withErrors = method.output.err match {
-          case Some(err) => q"$withOutputs.errorOut(${inferOutputTypeEncoder(err.tpe)})"
-          case None => withOutputs
-        }
-
-        withErrors
+        withOutputs
       }
 
-      val hasSec = secInputs.nonEmpty
+      val hasSec = secInput.nonEmpty
       val multiInput = (pathInputs.size + nonPathInputs.size) > 1
 
       if (hasSec)
